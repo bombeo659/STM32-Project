@@ -64,7 +64,7 @@ static void MX_TIM2_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 #define MAX_BUFFER_SIZE  30
-enum State{FREE, REQUEST, WAIT, RESPONCE, NOT_RESEND, RESEND, START, END};
+enum State{FREE, REQUEST, WAIT, RESPONSE, NOT_RESEND, RESEND, START, END};
 uint8_t state_request = FREE;
 uint8_t pre_state_request = FREE;
 uint8_t character_input = 0;
@@ -91,35 +91,40 @@ void send_ADC_data(uint8_t send_status) {
 		prev_ADC_value = ADC_value;
 	}
 	char msg[20];
-	HAL_UART_Transmit(&huart2, (void *)msg, sprintf(msg, "!ADC=%d#\n\r", prev_ADC_value), HAL_MAX_DELAY);
+	HAL_UART_Transmit(&huart2, (void *)msg, sprintf(msg, "!ADC=%d#", prev_ADC_value), HAL_MAX_DELAY);
+	// hien thi them thoi gian nhan duoc
+	uint32_t time = HAL_GetTick()/1000;
+	HAL_UART_Transmit(&huart2, (void *)msg, sprintf(msg, " -- time: %ld s\n\r", time), HAL_MAX_DELAY);
 }
 
 void set_timeout(uint8_t timeout_status) {
 	if(timeout_status == START) {
-		setTimer0(3000);
+		setTimer0(30);
 	}
 	timeout_flag = 0;
 }
 
 void command_parser_fsm() {
 	char request_command[] = "!RST#";
-	char responce_command[] = "!OK#";
-	uint8_t index = (index_buffer-1 >= 0) ? index_buffer-1 : MAX_BUFFER_SIZE-1;
-	if(buffer[index] == '#') {
+	char response_command[] = "!OK#";
+	uint8_t index = (index_buffer-2 >= 0) ? index_buffer-2 : MAX_BUFFER_SIZE-2;
+	// kiem tra gia tri cua cac ky tu nhap vao co ky tu xuong duong va '#' hay khong
+	if(buffer[index_buffer-1] == '\r' &&buffer[index] == '#') {
 		switch (buffer[index-1]) {
 		case 'T':
 			state_request = REQUEST;
 			for(int i = 2; i<5; i++) {
 				if(buffer[index-i] != request_command[4-i]) {
+					// neu chuoi vua nhan khong dung thi tra laij trang thai truoc do
 					state_request = pre_state_request;
 					break;
 				}
 			}
 			break;
 		case 'K':
-			state_request = RESPONCE;
+			state_request = RESPONSE;
 			for(int i = 2; i<4; i++) {
-				if(buffer[index-i] != responce_command[3-i]) {
+				if(buffer[index-i] != response_command[3-i]) {
 					state_request = pre_state_request;
 					break;
 				}
@@ -136,13 +141,23 @@ void command_parser_fsm() {
 void uart_communiation_fsm () {
 	switch (state_request) {
 	case FREE:
+		// hien thi cac led de theo doi trang thai
+		HAL_GPIO_WritePin(GPIOA, FREE_LED_Pin, 0);
+		HAL_GPIO_WritePin(GPIOA, REQUEST_LED_Pin, 1);
+		HAL_GPIO_WritePin(GPIOA, WAIT_LED_Pin, 1);
 		break;
 	case REQUEST:
+		HAL_GPIO_WritePin(GPIOA, FREE_LED_Pin, 1);
+		HAL_GPIO_WritePin(GPIOA, REQUEST_LED_Pin, 0);
+		HAL_GPIO_WritePin(GPIOA, WAIT_LED_Pin, 1);
 		send_ADC_data(NOT_RESEND);
 		set_timeout(START);
 		state_request = WAIT;
 		break;
 	case WAIT:
+		HAL_GPIO_WritePin(GPIOA, FREE_LED_Pin, 1);
+		HAL_GPIO_WritePin(GPIOA, REQUEST_LED_Pin, 1);
+		HAL_GPIO_WritePin(GPIOA, WAIT_LED_Pin, 0);
 		if(get_timer0_flag()){
 			timeout_flag = 1;
 		}
@@ -151,7 +166,7 @@ void uart_communiation_fsm () {
 			set_timeout(START);
 		}
 		break;
-	case RESPONCE:
+	case RESPONSE:
 		set_timeout(END);
 		state_request = FREE;
 		break;
@@ -193,9 +208,9 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  HAL_UART_Receive_IT(&huart2, &character_input, 1);
   HAL_TIM_Base_Start_IT(&htim2);
   HAL_ADC_Start(&hadc1);
-  HAL_UART_Receive_IT(&huart2, &character_input, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -206,7 +221,6 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 	  if(buffer_flag == 1){
-		  	  HAL_GPIO_TogglePin (LED_GPIO_Port, LED_Pin);
 			  command_parser_fsm();
 			  buffer_flag = 0;
 		  }
@@ -321,9 +335,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 8000-1;
+  htim2.Init.Prescaler = 40000-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 10;
+  htim2.Init.Period = 200;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -393,14 +407,14 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, FREE_LED_Pin|REQUEST_LED_Pin|WAIT_LED_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : LED_Pin */
-  GPIO_InitStruct.Pin = LED_Pin;
+  /*Configure GPIO pins : FREE_LED_Pin REQUEST_LED_Pin WAIT_LED_Pin */
+  GPIO_InitStruct.Pin = FREE_LED_Pin|REQUEST_LED_Pin|WAIT_LED_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 }
 
